@@ -2,7 +2,8 @@
 
 import type { InterestAreaKey } from '@lobechat/const';
 import type { BuiltinRenderProps, SaveUserQuestionInput } from '@lobechat/types';
-import { Flexbox, Text } from '@lobehub/ui';
+import { Flexbox } from '@lobehub/ui';
+import { Text } from '@lobehub/ui/base-ui';
 import { createStaticStyles } from 'antd-style';
 import { memo, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -59,15 +60,9 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
     color: ${cssVar.colorTextSecondary};
   `,
   value: css`
-    padding-block: 10px;
-    padding-inline: 12px;
-    border-radius: 10px;
-
     font-size: 14px;
     font-weight: 500;
     color: ${cssVar.colorText};
-
-    background: ${cssVar.colorFillQuaternary};
   `,
 }));
 

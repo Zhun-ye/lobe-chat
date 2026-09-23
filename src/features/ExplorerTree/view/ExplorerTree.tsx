@@ -10,13 +10,9 @@ import { FileTree as PierreFileTree, useFileTree, useFileTreeSelection } from '@
 import type { DragEvent, ForwardedRef, MouseEvent } from 'react';
 import { forwardRef, useImperativeHandle, useLayoutEffect, useMemo, useRef } from 'react';
 
-import {
-  arrayEqual,
-  type NormalizedTree,
-  normalizeTree,
-  remapIdsToPaths,
-  remapPathsToIds,
-} from '../adapter';
+import { useSingleton } from '@/hooks/useSingleton';
+
+import { arrayEqual, normalizeTree, remapIdsToPaths, remapPathsToIds } from '../adapter';
 import { extractName, toCanonicalTreePath } from '../adapter/path';
 import type {
   ExplorerTreeHandle,
@@ -67,7 +63,9 @@ function ExplorerTreeInner<TData>(
   const propsRef = useRef(props);
   propsRef.current = props;
 
-  const adapterRef = useRef<NormalizedTree<TData>>(normalizeTree(props.nodes));
+  const adapterRef = useSingleton(() => ({
+    current: normalizeTree(props.nodes),
+  }));
 
   // emitted values so we don't fire feedback loops on change listeners
   const lastEmittedSelectedIds = useRef<string[]>(
@@ -160,6 +158,7 @@ function ExplorerTreeInner<TData>(
         colored: props.iconsColored ?? true,
         set: props.iconSet ?? 'standard',
       },
+      gitStatus: props.gitStatus,
       initialExpandedPaths,
       initialSelectedPaths,
       itemHeight: props.itemHeight,
@@ -214,6 +213,7 @@ function ExplorerTreeInner<TData>(
         if (!node) return null;
         return (fn({ node }) as FileTreeRowDecoration | null) ?? null;
       },
+      unsafeCSS: props.unsafeCSS,
     };
     // we build options ONCE; callbacks read propsRef to stay fresh
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -224,6 +224,10 @@ function ExplorerTreeInner<TData>(
 
   // Observe selection changes so external consumers see updates without needing to pass a selection listener.
   useFileTreeSelection(model);
+
+  useLayoutEffect(() => {
+    model.setGitStatus(props.gitStatus);
+  }, [model, props.gitStatus]);
 
   // Track expansion by subscribing to mutation events (expansion isn't a mutation — use subscribe).
   // We read expanded paths on demand from the visible rows via getItem; emit when defaultExpanded or nodes changes.
@@ -244,7 +248,7 @@ function ExplorerTreeInner<TData>(
       lastExpandedSignatureRef.current = signature;
       onChange(nextExpanded);
     });
-  }, [model]);
+  }, [adapterRef, model]);
 
   const lastExpandedSignatureRef = useRef<string>('');
 
@@ -272,7 +276,7 @@ function ExplorerTreeInner<TData>(
     } finally {
       suppressModelEventsRef.current = false;
     }
-  }, [props.selectedIds, model]);
+  }, [adapterRef, props.selectedIds, model]);
 
   useLayoutEffect(() => {
     const expandedIds = props.expandedIds;
@@ -298,7 +302,7 @@ function ExplorerTreeInner<TData>(
     } finally {
       suppressModelEventsRef.current = false;
     }
-  }, [props.expandedIds, model]);
+  }, [adapterRef, props.expandedIds, model]);
 
   // nodes prop changes → resetPaths
   useLayoutEffect(() => {
@@ -392,7 +396,7 @@ function ExplorerTreeInner<TData>(
     } finally {
       suppressModelEventsRef.current = false;
     }
-  }, [props.nodes, model]);
+  }, [adapterRef, props.nodes, model]);
 
   useImperativeHandle(
     ref,
@@ -433,7 +437,7 @@ function ExplorerTreeInner<TData>(
         model.startRenaming(path);
       },
     }),
-    [model],
+    [adapterRef, model],
   );
 
   const handleContextMenu = (event: MouseEvent<HTMLElement>) => {

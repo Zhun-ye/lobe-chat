@@ -15,24 +15,20 @@ export const ListDocumentsInspector = memo<
 >(({ args, partialArgs, pluginState, isArgumentsStreaming, isLoading }) => {
   const { t } = useTranslation('plugin');
 
-  const target = args?.target || partialArgs?.target;
+  const scope = args?.scope || partialArgs?.scope;
   const count = pluginState?.documents?.length;
   const styles = inspectorChipStyles;
 
   return (
-    <div
-      style={{ flexWrap: 'wrap', gap: 4 }}
-      className={cx(
-        inspectorTextStyles.root,
-        (isArgumentsStreaming || isLoading) && shinyTextStyles.shinyText,
-      )}
-    >
-      <span>{t('builtins.lobe-agent-documents.apiName.listDocuments')}</span>
-      {target && (
+    <div className={inspectorTextStyles.root} style={{ flexWrap: 'wrap', gap: 4 }}>
+      <span className={cx((isArgumentsStreaming || isLoading) && shinyTextStyles.shinyText)}>
+        {t('builtins.lobe-agent-documents.apiName.listDocuments')}
+      </span>
+      {scope && (
         <>
           <span className={styles.separator}>·</span>
           <span className={styles.subdued}>
-            {t(`builtins.lobe-agent-documents.inspector.target.${target}` as const)}
+            {t(`builtins.lobe-agent-documents.inspector.scope.${scope}` as const)}
           </span>
         </>
       )}

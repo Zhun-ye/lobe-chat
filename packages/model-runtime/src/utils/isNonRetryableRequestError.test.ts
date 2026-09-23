@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import { AgentRuntimeErrorType } from '../types/error';
-import { isNonRetryableRequestError } from './isNonRetryableRequestError';
+import {
+  isImageDecodingRequestError,
+  isNonRetryableRequestError,
+} from './isNonRetryableRequestError';
 
 describe('isNonRetryableRequestError', () => {
   it('returns true for ExceededContextWindow errors', () => {
@@ -13,6 +16,60 @@ describe('isNonRetryableRequestError', () => {
     ).toBe(true);
   });
 
+  it('does not retry an oversized upstream request body on another channel', () => {
+    expect(
+      isNonRetryableRequestError({
+        error: { message: '<html>413 Request Entity Too Large</html>', status: 413 },
+        errorType: AgentRuntimeErrorType.RequestBodyTooLarge,
+      }),
+    ).toBe(true);
+  });
+
+  it('returns true for terminal image generation errors', () => {
+    expect(
+      isNonRetryableRequestError({
+        error: { message: 'Google image generation was blocked by content policy.' },
+        errorType: AgentRuntimeErrorType.ProviderContentPolicyViolation,
+      }),
+    ).toBe(true);
+
+    expect(
+      isNonRetryableRequestError({
+        error: { message: 'The provider did not return an image.' },
+        errorType: AgentRuntimeErrorType.ProviderNoImageGenerated,
+      }),
+    ).toBe(true);
+  });
+
+  it('returns true for provider image decoding request errors', () => {
+    expect(
+      isNonRetryableRequestError({
+        error: {
+          message:
+            '400 INVALID_ARGUMENT: Failed to decode image data. Please make sure the image is valid.',
+        },
+        errorType: AgentRuntimeErrorType.ProviderBizError,
+        status: 400,
+      }),
+    ).toBe(true);
+
+    expect(
+      isNonRetryableRequestError({
+        error: { message: 'Unable to process input image' },
+        errorType: AgentRuntimeErrorType.ProviderBizError,
+        status: 400,
+      }),
+    ).toBe(true);
+
+    expect(
+      isImageDecodingRequestError({
+        error: { message: 'Unable to process input image' },
+        errorType: AgentRuntimeErrorType.ProviderBizError,
+      }),
+    ).toBe(true);
+    expect(isImageDecodingRequestError({ message: 'Invalid request payload' })).toBe(false);
+  });
+
   it('returns true for invalid request payload errors', () => {
     expect(
       isNonRetryableRequestError({
@@ -22,6 +79,57 @@ describe('isNonRetryableRequestError', () => {
           type: 'invalid_request_error',
         },
         errorType: AgentRuntimeErrorType.ProviderBizError,
+      }),
+    ).toBe(true);
+  });
+
+  it('returns true for provider request-body-too-large context errors', () => {
+    expect(
+      isNonRetryableRequestError({
+        error: {
+          message: 'Request body too large for gpt-4o model',
+          type: 'invalid_request_error',
+        },
+        errorType: AgentRuntimeErrorType.ProviderBizError,
+        status: 400,
+      }),
+    ).toBe(true);
+  });
+
+  it('returns true for provider content_filter moderation errors', () => {
+    // ROOT CAUSE:
+    //
+    // OpenAI-compatible providers can return content filter rejections as 400
+    // responses with `code`, `type`, or `finish_reason` set to
+    // "content_filter" instead of a structured runtime error type. If the
+    // router treats that raw provider payload as retryable, one blocked prompt
+    // can fan out across fallback channels.
+    //
+    // Before the fix, this returned false because `content_filter` was not in
+    // the non-retryable code set.
+    //
+    // We fixed this by treating provider moderation signals as terminal request
+    // errors at the model-runtime retry gate.
+    expect(
+      isNonRetryableRequestError({
+        error: {
+          code: 'content_filter',
+          message: 'The provider blocked this prompt.',
+          type: 'content_filter',
+        },
+        errorType: AgentRuntimeErrorType.ProviderBizError,
+        status: 400,
+      }),
+    ).toBe(true);
+
+    expect(
+      isNonRetryableRequestError({
+        error: {
+          choices: [{ finish_reason: 'content_policy_violation' }],
+          message: 'The provider blocked this prompt.',
+        },
+        errorType: AgentRuntimeErrorType.ProviderBizError,
+        status: 400,
       }),
     ).toBe(true);
   });
@@ -78,6 +186,14 @@ describe('isNonRetryableRequestError', () => {
   it('returns false for retryable rate limit and quota errors', () => {
     expect(
       isNonRetryableRequestError({
+        error: { message: 'Unable to process input image' },
+        errorType: AgentRuntimeErrorType.ProviderBizError,
+        status: 429,
+      }),
+    ).toBe(false);
+
+    expect(
+      isNonRetryableRequestError({
         error: { code: 'rate_limit_exceeded', message: 'Rate limit reached for requests' },
         errorType: AgentRuntimeErrorType.ProviderBizError,
         status: 429,
@@ -89,6 +205,20 @@ describe('isNonRetryableRequestError', () => {
         error: { code: 'insufficient_quota', message: 'You exceeded your current quota' },
         errorType: AgentRuntimeErrorType.ProviderBizError,
         status: 429,
+      }),
+    ).toBe(false);
+  });
+
+  it('returns false for standardized provider account balance errors', () => {
+    expect(
+      isNonRetryableRequestError({
+        error: {
+          code: 'invalid_request_error',
+          message: 'Insufficient Balance',
+          type: 'unknown_error',
+        },
+        errorType: AgentRuntimeErrorType.InsufficientQuota,
+        status: 402,
       }),
     ).toBe(false);
   });

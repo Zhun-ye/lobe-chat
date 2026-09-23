@@ -1,10 +1,9 @@
-import { type LobeChatDatabase } from '@lobechat/database';
+import type { LobeChatDatabase } from '@lobechat/database';
 import debug from 'debug';
-import { type Configuration, type KoaContextWithOIDC } from 'oidc-provider';
+import type { Configuration, KoaContextWithOIDC } from 'oidc-provider';
 import Provider, { errors } from 'oidc-provider';
 import urlJoin from 'url-join';
 
-import { serverDBEnv } from '@/config/db';
 import { UserModel } from '@/database/models/user';
 import { appEnv } from '@/envs/app';
 import { getJWKS } from '@/libs/oidc-provider/jwt';
@@ -13,22 +12,32 @@ import { normalizeLocale } from '@/locales/resources';
 import { isOIDCUserBanned } from './access-control';
 import { DrizzleAdapter } from './adapter';
 import { defaultClaims, defaultClients, defaultScopes } from './config';
+import { getOIDCCookieKeys } from './cookies';
 import { createInteractionPolicy } from './interaction-policy';
 
 const logProvider = debug('lobe-oidc:provider');
 
 export const API_AUDIENCE = 'urn:lobehub:chat';
 
-/**
- * Get cookie keys using KEY_VAULTS_SECRET
- */
-const getCookieKeys = () => {
-  const key = serverDBEnv.KEY_VAULTS_SECRET;
-  if (!key) {
-    throw new Error('KEY_VAULTS_SECRET is required for OIDC Provider cookie encryption');
-  }
-  return [key];
-};
+const MINUTE_SECONDS = 60;
+const HOUR_SECONDS = 60 * MINUTE_SECONDS;
+const DAY_SECONDS = 24 * HOUR_SECONDS;
+
+// Keep all artifact TTLs explicit; oidc-provider validates its default TTL functions at runtime.
+export const oidcArtifactTTL = {
+  AccessToken: 7 * DAY_SECONDS,
+  AuthorizationCode: 10 * MINUTE_SECONDS,
+  BackchannelAuthenticationRequest: 10 * MINUTE_SECONDS,
+  ClientCredentials: 10 * MINUTE_SECONDS,
+  DeviceCode: 10 * MINUTE_SECONDS,
+  // oidc-provider never extends Grant.exp on refresh, so this is the absolute cap on a
+  // signed-in session no matter how often the refresh token rotates.
+  Grant: 365 * DAY_SECONDS,
+  IdToken: HOUR_SECONDS,
+  Interaction: HOUR_SECONDS,
+  RefreshToken: 30 * DAY_SECONDS,
+  Session: 30 * DAY_SECONDS,
+} satisfies NonNullable<Configuration['ttl']>;
 
 /**
  * Create OIDC Provider instance
@@ -39,7 +48,7 @@ export const createOIDCProvider = async (db: LobeChatDatabase): Promise<Provider
   // Get JWKS
   const jwks = getJWKS();
 
-  const cookieKeys = getCookieKeys();
+  const cookieKeys = getOIDCCookieKeys();
 
   const configuration: Configuration = {
     // 11. Database adapter
@@ -243,8 +252,7 @@ export const createOIDCProvider = async (db: LobeChatDatabase): Promise<Provider
         // Read the ui_locales parameter from the OIDC request (space-separated language priorities)
         // https://openid.net/specs/openid-connect-core-1_0.html#AuthRequest
         const uiLocalesRaw = (interaction.params?.ui_locales || ctx.oidc?.params?.ui_locales) as
-          | string
-          | undefined;
+          string | undefined;
 
         let query = '';
         if (uiLocalesRaw) {
@@ -273,20 +281,18 @@ export const createOIDCProvider = async (db: LobeChatDatabase): Promise<Provider
     },
 
     // 12. Other configuration
+    // Errors the provider will not redirect back to the client with (an
+    // unregistered redirect_uri, an unknown client, malformed parameters) land
+    // on a dedicated page instead of a raw JSON dump. Only the spec-defined
+    // `error` and `error_description` travel along; `state` stays behind.
     renderError: async (ctx, out, error) => {
-      ctx.type = 'html';
-      ctx.body = `
-        <html>
-          <head>
-            <title>LobeHub OIDC Error</title>
-          </head>
-          <body>
-            <h1>LobeHub OIDC Error</h1>
-            <p>${JSON.stringify(error, null, 2)}</p>
-            <p>${JSON.stringify(out, null, 2)}</p>
-          </body>
-        </html>
-      `;
+      logProvider('renderError: %O', error);
+
+      const params = new URLSearchParams();
+      if (out.error) params.set('error', String(out.error));
+      if (out.error_description) params.set('error_description', String(out.error_description));
+
+      ctx.redirect(`/oauth/error?${params.toString()}`);
     },
 
     // Added: enable refresh token rotation
@@ -303,17 +309,7 @@ export const createOIDCProvider = async (db: LobeChatDatabase): Promise<Provider
     scopes: defaultScopes,
 
     // 8. Token TTL
-    ttl: {
-      AccessToken: 7 * 24 * 3600, // 7 days
-      AuthorizationCode: 600, // 10 minutes
-      DeviceCode: 600, // 10 minutes (if enabled)
-
-      IdToken: 3600, // 1 hour
-      Interaction: 3600, // 1 hour
-
-      RefreshToken: 30 * 24 * 60 * 60, // 30 days
-      Session: 30 * 24 * 60 * 60, // 30 days
-    },
+    ttl: oidcArtifactTTL,
   };
 
   // Create provider instance

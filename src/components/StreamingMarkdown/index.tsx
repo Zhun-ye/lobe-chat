@@ -41,17 +41,9 @@ const StreamingMarkdown = memo<StreamingMarkdownProps>(({ children, maxHeight = 
 
   return (
     <ScrollArea
+      disableContentFit
       scrollFade
       className={styles.scrollRoot}
-      contentProps={{
-        style: {
-          color: 'inherit',
-          display: 'block',
-          fontSize: 'inherit',
-          gap: 0,
-          lineHeight: 'inherit',
-        },
-      }}
       viewportProps={{
         className: styles.container,
         ref: ref as RefObject<HTMLDivElement>,

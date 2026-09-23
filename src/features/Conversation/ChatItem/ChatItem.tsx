@@ -1,5 +1,6 @@
 'use client';
 
+import { agentDisplayName } from '@lobechat/types';
 import { Flexbox } from '@lobehub/ui';
 import { cx } from 'antd-style';
 import { memo } from 'react';
@@ -12,13 +13,15 @@ import ErrorContent from './components/ErrorContent';
 import MessageContent from './components/MessageContent';
 import Title from './components/Title';
 import { styles } from './style';
-import { type ChatItemProps } from './type';
+import type { ChatItemProps } from './type';
 
 const ChatItem = memo<ChatItemProps>(
   ({
     onAvatarClick,
     avatarProps,
     customAvatarRender,
+    afterActions,
+    actionAddon,
     actions,
     className,
     loading,
@@ -36,6 +39,7 @@ const ChatItem = memo<ChatItemProps>(
     onDoubleClick,
     aboveMessage,
     belowMessage,
+    headerAddon,
     showAvatar = true,
     titleAddon,
     disabled = false,
@@ -44,7 +48,7 @@ const ChatItem = memo<ChatItemProps>(
     ...rest
   }) => {
     const isUser = placement === 'right';
-    const topicId = useConversationStore(contextSelectors.topicId);
+    const conversationKey = useConversationStore(contextSelectors.conversationKey);
     const isEmptyMessage =
       !message || String(message).trim() === '' || message === placeholderMessage;
     const errorContent = error && (
@@ -53,7 +57,7 @@ const ChatItem = memo<ChatItemProps>(
 
     const avatarContent = (
       <Avatar
-        alt={avatarProps?.alt || avatar.title || 'avatar'}
+        alt={avatarProps?.alt || agentDisplayName(avatar, 'avatar')}
         loading={loading}
         shape={'square'}
         onClick={onAvatarClick}
@@ -83,6 +87,7 @@ const ChatItem = memo<ChatItemProps>(
         >
           {showAvatar &&
             (customAvatarRender ? customAvatarRender(avatar, avatarContent) : avatarContent)}
+          {headerAddon}
           <Title avatar={avatar} showTitle={showTitle} time={time} titleAddon={titleAddon} />
         </Flexbox>
         <Flexbox
@@ -118,8 +123,21 @@ const ChatItem = memo<ChatItemProps>(
           )}
           {belowMessage}
         </Flexbox>
-        {id && topicId && <FollowUpChips messageId={id} topicId={topicId} />}
-        {actions && <Actions actions={actions} placement={placement} />}
+        {id && conversationKey && (
+          <FollowUpChips conversationKey={conversationKey} messageId={id} />
+        )}
+        {(actionAddon || actions) && (
+          <Actions actionAddon={actionAddon} actions={actions} placement={placement} />
+        )}
+        {afterActions && (
+          <Flexbox
+            style={{
+              width: isUser ? undefined : '100%',
+            }}
+          >
+            {afterActions}
+          </Flexbox>
+        )}
       </Flexbox>
     );
   },

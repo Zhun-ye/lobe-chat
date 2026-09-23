@@ -27,18 +27,22 @@ const testState = vi.hoisted(() => ({
   updateAgentChatConfig: vi.fn(),
 }));
 
-vi.mock('@lobehub/ui', () => {
+vi.mock('@lobehub/ui', async (importOriginal) => {
   const MockForm = () => <div data-testid="controls-form" />;
   MockForm.useForm = () => [{ setFieldsValue: testState.setFieldsValue }];
 
-  return { Form: MockForm };
+  return {
+    ...(await importOriginal<object>()),
+    Form: MockForm,
+  };
 });
 
-vi.mock('antd', () => {
+vi.mock('antd', async (importOriginal) => {
+  const antd = await importOriginal<{ Form: object }>();
+
   return {
-    Form: { useWatch: vi.fn(() => undefined) },
-    Grid: { useBreakpoint: () => ({ sm: true }) },
-    Switch: () => <input type="checkbox" />,
+    ...antd,
+    Form: { ...antd.Form, useWatch: vi.fn(() => undefined) },
   };
 });
 
@@ -117,5 +121,33 @@ describe('ControlsForm', () => {
       thinking: 'enabled',
     });
     expect(testState.updateAgentChatConfig).not.toHaveBeenCalled();
+  });
+
+  it('should show model adaptive thinking default without persisting it', () => {
+    testState.aiState.extendParams = ['enableAdaptiveThinking'];
+
+    render(<ControlsForm model="claude-sonnet-5" provider="lobehub" />);
+
+    expect(testState.setFieldsValue).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        enableAdaptiveThinking: true,
+      }),
+    );
+    expect(testState.updateAgentChatConfig).not.toHaveBeenCalled();
+  });
+
+  it('should preserve explicit adaptive thinking override', () => {
+    testState.agentState.config = {
+      enableAdaptiveThinking: false,
+    };
+    testState.aiState.extendParams = ['enableAdaptiveThinking'];
+
+    render(<ControlsForm model="claude-sonnet-5" provider="lobehub" />);
+
+    expect(testState.setFieldsValue).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        enableAdaptiveThinking: false,
+      }),
+    );
   });
 });

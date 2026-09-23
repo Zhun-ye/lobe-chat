@@ -1,6 +1,16 @@
-import { AgentRuntimeErrorType } from '../types/error';
+import { toRecord } from '@lobechat/utils';
 
-const NON_RETRYABLE_ERROR_TYPES = new Set<string>([AgentRuntimeErrorType.ExceededContextWindow]);
+import { AgentRuntimeErrorType } from '../types/error';
+import { isErrorCausedByContentFilter } from './isErrorCausedByContentFilter';
+
+const NON_RETRYABLE_ERROR_TYPES = new Set<string>([
+  AgentRuntimeErrorType.ExceededContextWindow,
+  AgentRuntimeErrorType.InvalidRequestFormat,
+  AgentRuntimeErrorType.ProviderContentPolicyViolation,
+  AgentRuntimeErrorType.ProviderNoImageGenerated,
+  // Avoid amplifying an oversized payload across channels, accepting that proxy limits can differ.
+  AgentRuntimeErrorType.RequestBodyTooLarge,
+]);
 const RETRYABLE_STATUS_CODES = new Set([401, 403, 404, 408, 409, 423, 425, 429]);
 const RETRYABLE_ERROR_CODES = new Set([
   'accountdeactivated',
@@ -9,6 +19,7 @@ const RETRYABLE_ERROR_CODES = new Set([
   'invalidapikey',
   'invalidproviderapikey',
   'insufficient_quota',
+  AgentRuntimeErrorType.InsufficientQuota.toLowerCase(),
   'model_not_found',
   'quota_exceeded',
   'rate_limit_exceeded',
@@ -45,6 +56,11 @@ const RETRYABLE_MESSAGE_PATTERNS = [
   'unauthorized',
 ];
 
+const IMAGE_DECODING_MESSAGE_PATTERNS = [
+  'failed to decode image data',
+  'unable to process input image',
+];
+
 const NON_RETRYABLE_MESSAGE_PATTERNS = [
   'assistant message prefill',
   'conversation must end with a user message',
@@ -52,6 +68,7 @@ const NON_RETRYABLE_MESSAGE_PATTERNS = [
   'context_length_exceeded',
   'does not support parameter',
   'expected a string',
+  ...IMAGE_DECODING_MESSAGE_PATTERNS,
   'input is too long',
   'input tokens exceed',
   'invalid input',
@@ -65,6 +82,7 @@ const NON_RETRYABLE_MESSAGE_PATTERNS = [
   'messages with role',
   'missing required parameter',
   'prompt is too long',
+  'request body too large',
   'request too large for model',
   'response_format',
   'schema validation error',
@@ -75,9 +93,6 @@ const NON_RETRYABLE_MESSAGE_PATTERNS = [
   'unsupported parameter',
   'unrecognized request argument',
 ];
-
-const toRecord = (value: unknown): Record<string, unknown> | undefined =>
-  value && typeof value === 'object' ? (value as Record<string, unknown>) : undefined;
 
 const collectErrorStrings = (
   value: unknown,
@@ -94,6 +109,13 @@ const collectErrorStrings = (
       value.message,
       ...collectErrorStrings(value.cause, visited, depth + 1),
     ].filter(Boolean);
+  }
+
+  if (Array.isArray(value)) {
+    if (visited.has(value)) return [];
+    visited.add(value);
+
+    return value.flatMap((item) => collectErrorStrings(item, visited, depth + 1));
   }
 
   const objectValue = toRecord(value);
@@ -116,6 +138,13 @@ const collectStatusCodes = (
   depth = 0,
 ): number[] => {
   if (depth > 4 || value === undefined || value === null) return [];
+  if (Array.isArray(value)) {
+    if (visited.has(value)) return [];
+    visited.add(value);
+
+    return value.flatMap((item) => collectStatusCodes(item, visited, depth + 1));
+  }
+
   const objectValue = toRecord(value);
   if (!objectValue) return [];
   if (visited.has(objectValue)) return [];
@@ -140,6 +169,14 @@ const collectStatusCodes = (
   return result;
 };
 
+export const isImageDecodingRequestError = (error: unknown): boolean => {
+  const combined = collectErrorStrings(error)
+    .map((value) => value.toLowerCase())
+    .join('\n');
+
+  return IMAGE_DECODING_MESSAGE_PATTERNS.some((pattern) => combined.includes(pattern));
+};
+
 export const isNonRetryableRequestError = (error: unknown): boolean => {
   const errorStrings = collectErrorStrings(error);
   const normalizedStrings = errorStrings.map((value) => value.toLowerCase());
@@ -149,15 +186,20 @@ export const isNonRetryableRequestError = (error: unknown): boolean => {
     if (typeof errorType === 'string' && NON_RETRYABLE_ERROR_TYPES.has(errorType)) return true;
   }
 
+  if (isErrorCausedByContentFilter(error)) return true;
+
+  // Explicitly retryable HTTP statuses represent route or channel conditions.
+  // They take precedence over provider body text, which can reuse terminal
+  // request phrases such as "unable to process input image" for a 429 response.
+  const statusCodes = collectStatusCodes(error);
+  if (statusCodes.some((statusCode) => RETRYABLE_STATUS_CODES.has(statusCode))) return false;
+
   if (normalizedStrings.some((value) => RETRYABLE_ERROR_CODES.has(value))) return false;
   if (normalizedStrings.some((value) => NON_RETRYABLE_ERROR_CODES.has(value))) return true;
 
   const combined = normalizedStrings.join('\n');
   if (RETRYABLE_MESSAGE_PATTERNS.some((pattern) => combined.includes(pattern))) return false;
   if (NON_RETRYABLE_MESSAGE_PATTERNS.some((pattern) => combined.includes(pattern))) return true;
-
-  const statusCodes = collectStatusCodes(error);
-  if (statusCodes.some((statusCode) => RETRYABLE_STATUS_CODES.has(statusCode))) return false;
 
   return false;
 };
